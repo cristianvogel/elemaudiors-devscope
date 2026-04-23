@@ -1,11 +1,11 @@
 # elemaudiors-devscope
 
-DevTools panel for live `elemaudio-rs` debug scope events.
+DevTools panel for live `elementary.js` and `elemaudiors` debug scope events.
 
 A scope for debugging signals compatible with Elementary.js and Elemaudiors.
 
 This extension does not inspect arbitrary `NodeRepr_t` graphs after the fact.
-It only renders signals that the page explicitly taps with `scope` or `frameScope`
+It only renders signals that the page explicitly taps with `el.scope` or `el.extra.frameScope`
 and forwards through the page bridge.
 
 ## Current Status
@@ -54,7 +54,7 @@ window.postMessage({
 }, '*')
 ```
 
-The current `elemaudio-rs` web demos forward `scope` events through the shared
+For example the current `elemaudiors` [web demos]() forward `scope` events through the shared
 demo harness, so instrumented demos do not need custom bridge code per page.
 
 ## How To Use With `elemaudio-rs`
@@ -89,9 +89,3 @@ const frameTap = el.extra.frameScope(
 - `frameScope` events are transported through the same bridge and rendered the
   same way for now.
 
-## Next Likely Work
-
-- Real tab/session labels in the panel
-- Source grouping and search
-- Better handling for multi-channel scope events
-- Freeze-history comparison between successive events
