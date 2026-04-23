@@ -6,6 +6,7 @@ let selectedSource = 'sample:fshift:lower'
 let frozen = false
 let bridgeConnected = false
 let lastSeenBySource = new Map()
+let sourceModes = new Map()
 
 function setStatus(text) {
   bridgeStatus.textContent = text
@@ -72,6 +73,7 @@ sourceSelect.addEventListener('change', () => {
 function ensureSource(event) {
   if (!sources.has(event.source)) {
     sources.set(event.source, { latest: event, history: [] })
+    sourceModes.set(event.source, 'audio')
     const option = document.createElement('option')
     option.value = event.source
     option.textContent = event.source
@@ -122,6 +124,13 @@ function receiveDebugEvent(event) {
   slot.latest = event
   slot.history = toPlainNumberArray(event.channels[0])
 
+  if (sourceModes.get(event.source) !== 'auto') {
+    const exceedsAudioRange = slot.history.some((sample) => sample < -1 || sample > 1)
+    if (exceedsAudioRange) {
+      sourceModes.set(event.source, 'auto')
+    }
+  }
+
   if (!sourceSelect.value || !sources.has(selectedSource)) {
     selectedSource = event.source
     sourceSelect.value = event.source
@@ -144,8 +153,9 @@ function renderSelectedSource() {
   drawSparkplot(slot.history)
 
   const channel = toPlainNumberArray(slot.latest.channels?.[0])
+  const mode = sourceModes.get(selectedSource) ?? 'audio'
   if (!channel.length) {
-    stats.textContent = 'no channel data'
+    stats.textContent = `mode ${mode}   no channel data`
     eventMeta.textContent = `seq ${slot.latest.seq ?? '?'}  sr ${slot.latest.sampleRate ?? '?'}  n 0`
     eventJson.textContent = JSON.stringify(slot.latest, null, 2)
     return
@@ -155,7 +165,7 @@ function renderSelectedSource() {
   const max = Math.max(...channel)
   const rms = Math.sqrt(channel.reduce((sum, x) => sum + x * x, 0) / Math.max(1, channel.length))
 
-  stats.textContent = `min ${min.toFixed(3)}   max ${max.toFixed(3)}   rms ${rms.toFixed(3)}`
+  stats.textContent = `mode ${mode}   min ${min.toFixed(3)}   max ${max.toFixed(3)}   rms ${rms.toFixed(3)}`
   eventMeta.textContent = `seq ${slot.latest.seq}  sr ${slot.latest.sampleRate}  n ${channel.length}`
   eventJson.textContent = JSON.stringify(slot.latest, null, 2)
 }
@@ -181,13 +191,29 @@ function drawSparkplot(samples) {
 
   if (!samples.length) return
 
+  const mode = sourceModes.get(selectedSource) ?? 'audio'
+  let drawMin = -1
+  let drawMax = 1
+
+  if (mode === 'auto') {
+    drawMin = Math.min(...samples)
+    drawMax = Math.max(...samples)
+    if (drawMin === drawMax) {
+      drawMin -= 1
+      drawMax += 1
+    }
+  }
+
   ctx.strokeStyle = '#8b5cf6'
   ctx.lineWidth = 2
   ctx.beginPath()
 
   for (let i = 0; i < samples.length; i += 1) {
     const x = (i / Math.max(1, samples.length - 1)) * width
-    const y = mid - samples[i] * (height * 0.42)
+    const normalized = mode === 'auto'
+      ? ((samples[i] - drawMin) / (drawMax - drawMin)) * 2 - 1
+      : Math.max(-1, Math.min(1, samples[i]))
+    const y = mid - normalized * (height * 0.42)
     if (i === 0) ctx.moveTo(x, y)
     else ctx.lineTo(x, y)
   }
@@ -196,6 +222,8 @@ function drawSparkplot(samples) {
 }
 
 function requestReconnect() {
+  sourceModes = new Map(Array.from(sources.keys(), (source) => [source, 'audio']))
+
   if (!bridgeConnected) {
     setStatus('waiting for inspected page debug cache')
   }
