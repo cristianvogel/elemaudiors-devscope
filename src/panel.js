@@ -7,6 +7,10 @@ let frozen = false
 let bridgeConnected = false
 let lastSeenBySource = new Map()
 
+function setStatus(text) {
+  bridgeStatus.textContent = text
+}
+
 document.querySelector('#app').innerHTML = `
   <main class="panel-shell">
     <header class="panel-header">
@@ -72,6 +76,11 @@ function ensureSource(event) {
     option.value = event.source
     option.textContent = event.source
     sourceSelect.append(option)
+
+    if (sourceSelect.options.length === 1 || !sources.has(selectedSource)) {
+      selectedSource = event.source
+      sourceSelect.value = event.source
+    }
   }
 
   return sources.get(event.source)
@@ -94,7 +103,7 @@ function receiveDebugEvent(event) {
 
   if (event.kind === 'lifecycle') {
     bridgeConnected = true
-    bridgeStatus.textContent = 'live page bridge connected'
+    setStatus('live page bridge connected')
     return
   }
 
@@ -113,18 +122,19 @@ function receiveDebugEvent(event) {
   slot.latest = event
   slot.history = toPlainNumberArray(event.channels[0])
 
-  if (!sourceSelect.value) {
-    sourceSelect.value = selectedSource
+  if (!sourceSelect.value || !sources.has(selectedSource)) {
+    selectedSource = event.source
+    sourceSelect.value = event.source
   }
 
-  if (event.source === selectedSource) {
+  if (event.source === selectedSource || sourceSelect.options.length === 1) {
     renderSelectedSource()
   }
 }
 
 function activateLiveMode() {
   bridgeConnected = true
-  bridgeStatus.textContent = 'live page bridge connected'
+  setStatus('live page bridge connected')
 }
 
 function renderSelectedSource() {
@@ -186,9 +196,14 @@ function drawSparkplot(samples) {
 }
 
 function requestReconnect() {
-  bridgeStatus.textContent = bridgeConnected
-    ? 'refreshing inspected page debug cache'
-    : 'waiting for inspected page debug cache'
+  if (!bridgeConnected) {
+    setStatus('waiting for inspected page debug cache')
+  }
+
+  if (!sources.has(selectedSource) && sourceSelect.options.length > 0) {
+    selectedSource = sourceSelect.options[0].value
+    sourceSelect.value = selectedSource
+  }
 
   chrome.devtools.inspectedWindow.eval(`
     (() => {
@@ -216,23 +231,25 @@ function requestReconnect() {
     })()
   `, (result, exceptionInfo) => {
     if (exceptionInfo) {
-      bridgeStatus.textContent = 'could not read debug cache from inspected page'
+      setStatus('could not read debug cache from inspected page')
       return
     }
 
     if (!result) {
-      bridgeStatus.textContent = 'inspected page has no debug cache yet'
+      if (!bridgeConnected) {
+        setStatus('inspected page has no debug cache yet')
+      }
       return
     }
 
     try {
       const payload = typeof result === 'string' ? JSON.parse(result) : result
-      if (payload?.location) {
-        bridgeStatus.textContent = `reading debug cache from ${payload.location}`
+      if (!bridgeConnected && payload?.location) {
+        setStatus(`reading debug cache from ${payload.location}`)
       }
       ingestCache(payload?.cache)
     } catch {
-      bridgeStatus.textContent = `debug cache payload was not valid JSON (${typeof result})`
+      setStatus(`debug cache payload was not valid JSON (${typeof result})`)
     }
   })
 }
