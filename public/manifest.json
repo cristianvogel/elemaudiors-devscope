@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "elemaudiors-devscope",
+  "version": "0.0.0",
+  "description": "DevTools sparkline panel for elemaudio-rs debug scope events.",
+  "devtools_page": "devtools.html",
+  "permissions": [],
+  "host_permissions": ["<all_urls>"],
+  "icons": {
+    "16": "favicon.svg",
+    "48": "favicon.svg",
+    "128": "favicon.svg"
+  }
+}
