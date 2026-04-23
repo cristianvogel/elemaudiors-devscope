@@ -1,17 +1,14 @@
 # elemaudiors-devscope
 
-DevTools panel for live `elemaudiors` debug scope events.
+DevTools panel for live `elemaudiors` or `elementary.js` signal node debugging.
 
-A scope for debugging signals compatible with Elementary.js and Elemaudiors.
-
-This extension does not inspect arbitrary `NodeRepr_t` graphs after the fact.
+This extension allows to inspect arbitrary `NodeRepr_t` signals from a live graph.
 It only renders signals that the page explicitly taps and forwards through a page-side bridge.
 
 ## Current Status
 
 - Custom DevTools panel is wired
 - Live page bridge contract is documented
-- `elemaudio-rs` Preset Bank Synth demo is instrumented for real signals
 
 ## Build
 
@@ -37,7 +34,7 @@ The panel name is `elemaudiors`.
 The current panel reads `window.__ELEMAUDIO_DEBUG_CACHE__` from the inspected page.
 See `bridge-example.js` in this repo for the minimal page-side contract.
 
-## How To Use With `elemaudio-rs`
+## How To Use With `elemaudiors` and `elementary.js`
 
 1. Add a named tap in the DSP graph:
 
@@ -57,4 +54,4 @@ const root = el.add(voice, el.mul(0, tapped))
 
 - The panel currently shows the first channel of each scope event as a sparkline.
 - The raw event payload is shown below the plot.
-- `frameScope` events are transported through the same bridge and rendered the same way.
+- `el.extra.frameScope` events,  extended scopes for frame-synched programming in `elemaudiors` (not available in `Elementary.js`) ,  are transported through the same bridge and rendered the same way.
