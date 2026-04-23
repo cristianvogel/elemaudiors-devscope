@@ -1,18 +1,16 @@
 # elemaudiors-devscope
 
-DevTools panel for live `elementary.js` and `elemaudiors` debug scope events.
+DevTools panel for live `elemaudiors` debug scope events.
 
 A scope for debugging signals compatible with Elementary.js and Elemaudiors.
 
 This extension does not inspect arbitrary `NodeRepr_t` graphs after the fact.
-It only renders signals that the page explicitly taps with `el.scope` or `el.extra.frameScope`
-and forwards through the page bridge.
+It only renders signals that the page explicitly taps and forwards through a page-side bridge.
 
 ## Current Status
 
 - Custom DevTools panel is wired
-- Mock sparkline fallback is wired
-- Live page bridge is wired
+- Live page bridge contract is documented
 - `elemaudio-rs` Preset Bank Synth demo is instrumented for real signals
 
 ## Build
@@ -31,31 +29,13 @@ The extension bundle is written to `dist/`.
 3. Click `Load unpacked`
 4. Select the repo `dist/` directory
 
-After that, open DevTools on a page that publishes `elemaudio.debug` messages.
-The panel name is `elemaudio`.
+After that, open DevTools on a page that publishes `window.__ELEMAUDIO_DEBUG_CACHE__`.
+The panel name is `elemaudiors`.
 
-## Bridge Contract
+## Bridge Example
 
-The extension listens for page messages with this envelope:
-
-```js
-window.postMessage({
-  source: 'elemaudiors-devscope',
-  type: 'elemaudio.debug',
-  event: {
-    schema: 'elemaudio.debug',
-    version: 1,
-    kind: 'scope',
-    mode: 'stream',
-    source: 'preset-synth:voice',
-    timestampMs: performance.now(),
-    channels: [[0, 0.2, -0.1]],
-  },
-}, '*')
-```
-
-For example the current `elemaudiors` [web demos]() forward `scope` events through the shared
-demo harness, so instrumented demos do not need custom bridge code per page.
+The current panel reads `window.__ELEMAUDIO_DEBUG_CACHE__` from the inspected page.
+See `bridge-example.js` in this repo for the minimal page-side contract.
 
 ## How To Use With `elemaudio-rs`
 
@@ -66,18 +46,9 @@ const tapped = el.scope({ name: 'preset-synth:voice' }, voice)
 const root = el.add(voice, el.mul(0, tapped))
 ```
 
-For exact frame captures, use `frameScope` instead:
-
-```ts
-const frameTap = el.extra.frameScope(
-  { name: 'preset-synth:activeScope', framelength: 8 },
-  activeFrame,
-)
-```
-
 2. Keep the tap alive in the rendered graph with `mul(0, tapped)`.
 
-3. Open the page, then open DevTools and switch to the `elemaudio` panel.
+3. Open the page, then open DevTools and switch to the `elemaudiors` panel.
 
 4. Pick the signal name from the source selector.
 
@@ -86,6 +57,4 @@ const frameTap = el.extra.frameScope(
 
 - The panel currently shows the first channel of each scope event as a sparkline.
 - The raw event payload is shown below the plot.
-- `frameScope` events are transported through the same bridge and rendered the
-  same way for now.
-
+- `frameScope` events are transported through the same bridge and rendered the same way.
