@@ -7,6 +7,7 @@ let frozen = false
 let bridgeConnected = false
 let lastSeenBySource = new Map()
 let sourceModes = new Map()
+let sourceRanges = new Map()
 
 function setStatus(text) {
   bridgeStatus.textContent = text
@@ -74,6 +75,7 @@ function ensureSource(event) {
   if (!sources.has(event.source)) {
     sources.set(event.source, { latest: event, history: [] })
     sourceModes.set(event.source, 'audio')
+    sourceRanges.set(event.source, { min: -1, max: 1 })
     const option = document.createElement('option')
     option.value = event.source
     option.textContent = event.source
@@ -124,11 +126,24 @@ function receiveDebugEvent(event) {
   slot.latest = event
   slot.history = toPlainNumberArray(event.channels[0])
 
+  const blockMin = slot.history.length ? Math.min(...slot.history) : -1
+  const blockMax = slot.history.length ? Math.max(...slot.history) : 1
+  const currentRange = sourceRanges.get(event.source) ?? { min: -1, max: 1 }
+
   if (sourceModes.get(event.source) !== 'auto') {
-    const exceedsAudioRange = slot.history.some((sample) => sample < -1 || sample > 1)
+    const exceedsAudioRange = blockMin < -1 || blockMax > 1
     if (exceedsAudioRange) {
       sourceModes.set(event.source, 'auto')
+      sourceRanges.set(event.source, {
+        min: Math.min(currentRange.min, blockMin),
+        max: Math.max(currentRange.max, blockMax),
+      })
     }
+  } else {
+    sourceRanges.set(event.source, {
+      min: Math.min(currentRange.min, blockMin),
+      max: Math.max(currentRange.max, blockMax),
+    })
   }
 
   if (!sourceSelect.value || !sources.has(selectedSource)) {
@@ -196,8 +211,9 @@ function drawSparkplot(samples) {
   let drawMax = 1
 
   if (mode === 'auto') {
-    drawMin = Math.min(...samples)
-    drawMax = Math.max(...samples)
+    const range = sourceRanges.get(selectedSource)
+    drawMin = range?.min ?? Math.min(...samples)
+    drawMax = range?.max ?? Math.max(...samples)
     if (drawMin === drawMax) {
       drawMin -= 1
       drawMax += 1
@@ -223,6 +239,7 @@ function drawSparkplot(samples) {
 
 function requestReconnect() {
   sourceModes = new Map(Array.from(sources.keys(), (source) => [source, 'audio']))
+  sourceRanges = new Map(Array.from(sources.keys(), (source) => [source, { min: -1, max: 1 }]))
 
   if (!bridgeConnected) {
     setStatus('waiting for inspected page debug cache')
