@@ -1,6 +1,6 @@
 import './style.css'
 
-const POLL_INTERVAL_MS = 250
+const POLL_INTERVAL_MS = 50
 const sources = new Map()
 let selectedSource = 'sample:fshift:lower'
 let frozen = false
@@ -17,12 +17,14 @@ document.querySelector('#app').innerHTML = `
   <main class="panel-shell">
     <header class="panel-header">
       <div>
-        <p class="eyebrow">DevTools Panel</p>
-        <h1>elemaudiors-devscope</h1>
+        <p class="eyebrow">elemaudiors devscope</p>
       </div>
       <div class="panel-action-row">
         <button id="reconnect" class="panel-button" type="button">Reconnect</button>
         <button id="freeze" class="panel-button" type="button">Freeze</button>
+        <button id="mode-toggle" class="panel-button" 
+        type="button" 
+        title="Toggle display range for the selected source. Entering Adaptive resets tracked min/max.">Audio Range</button>
       </div>
     </header>
     <section class="panel-toolbar">
@@ -56,6 +58,7 @@ const eventMeta = document.querySelector('#event-meta')
 const eventJson = document.querySelector('#event-json')
 const freezeButton = document.querySelector('#freeze')
 const reconnectButton = document.querySelector('#reconnect')
+const modeToggleButton = document.querySelector('#mode-toggle')
 
 freezeButton.addEventListener('click', () => {
   frozen = !frozen
@@ -66,8 +69,13 @@ reconnectButton.addEventListener('click', () => {
   requestReconnect()
 })
 
+modeToggleButton.addEventListener('click', () => {
+  toggleSelectedSourceMode()
+})
+
 sourceSelect.addEventListener('change', () => {
   selectedSource = sourceSelect.value
+  syncModeToggleLabel()
   renderSelectedSource()
 })
 
@@ -75,7 +83,7 @@ function ensureSource(event) {
   if (!sources.has(event.source)) {
     sources.set(event.source, { latest: event, history: [] })
     sourceModes.set(event.source, 'audio')
-    sourceRanges.set(event.source, { min: -1, max: 1 })
+    sourceRanges.set(event.source, null)
     const option = document.createElement('option')
     option.value = event.source
     option.textContent = event.source
@@ -115,40 +123,32 @@ function receiveDebugEvent(event) {
     return
   }
 
-  const previousStamp = lastSeenBySource.get(event.source)
-  const currentStamp = `${event.graphId}:${event.timestampMs}`
-  if (previousStamp === currentStamp) {
+  // Producer emits a monotonic seq per source. Same seq means same block,
+  // so skip it to avoid re-running UI work for nothing.
+  const previousSeq = lastSeenBySource.get(event.source)
+  if (typeof event.seq === 'number' && previousSeq === event.seq) {
     return
   }
-  lastSeenBySource.set(event.source, currentStamp)
+  if (typeof event.seq === 'number') {
+    lastSeenBySource.set(event.source, event.seq)
+  }
 
   const slot = ensureSource(event)
   slot.latest = event
   slot.history = toPlainNumberArray(event.channels[0])
 
-  const blockMin = slot.history.length ? Math.min(...slot.history) : -1
-  const blockMax = slot.history.length ? Math.max(...slot.history) : 1
-  const currentRange = sourceRanges.get(event.source) ?? { min: -1, max: 1 }
-
-  if (sourceModes.get(event.source) !== 'auto') {
-    const exceedsAudioRange = blockMin < -1 || blockMax > 1
-    if (exceedsAudioRange) {
-      sourceModes.set(event.source, 'auto')
-      sourceRanges.set(event.source, {
-        min: Math.min(currentRange.min, blockMin),
-        max: Math.max(currentRange.max, blockMax),
-      })
-    }
-  } else {
-    sourceRanges.set(event.source, {
-      min: Math.min(currentRange.min, blockMin),
-      max: Math.max(currentRange.max, blockMax),
-    })
+  // Producer already tracks held min/max across the session for this source.
+  // Mirror those into the panel state so the draw code keeps working even if
+  // trackedMin/Max are briefly undefined on the very first event. Mode is
+  // user-controlled now, so no auto-flip happens here.
+  if (typeof event.trackedMin === 'number' && typeof event.trackedMax === 'number') {
+    sourceRanges.set(event.source, { min: event.trackedMin, max: event.trackedMax })
   }
 
   if (!sourceSelect.value || !sources.has(selectedSource)) {
     selectedSource = event.source
     sourceSelect.value = event.source
+    syncModeToggleLabel()
   }
 
   if (event.source === selectedSource || sourceSelect.options.length === 1) {
@@ -176,12 +176,16 @@ function renderSelectedSource() {
     return
   }
 
-  const min = Math.min(...channel)
-  const max = Math.max(...channel)
+  // Prefer authoritative values from the producer. Fall back to block values
+  // only if the event was emitted by an older page that predates trackedMin/Max.
+  const fallbackMin = Math.min(...channel)
+  const fallbackMax = Math.max(...channel)
+  const trackedMin = typeof slot.latest.trackedMin === 'number' ? slot.latest.trackedMin : fallbackMin
+  const trackedMax = typeof slot.latest.trackedMax === 'number' ? slot.latest.trackedMax : fallbackMax
   const rms = Math.sqrt(channel.reduce((sum, x) => sum + x * x, 0) / Math.max(1, channel.length))
 
-  stats.textContent = `mode ${mode}   min ${min.toFixed(3)}   max ${max.toFixed(3)}   rms ${rms.toFixed(3)}`
-  eventMeta.textContent = `seq ${slot.latest.seq}  sr ${slot.latest.sampleRate}  n ${channel.length}`
+  stats.textContent = `mode ${mode}   min ${trackedMin.toFixed(3)}   max ${trackedMax.toFixed(3)}   rms ${rms.toFixed(3)}`
+  eventMeta.textContent = `seq ${slot.latest.seq ?? '?'}  sr ${slot.latest.sampleRate ?? '?'}  n ${channel.length}`
   eventJson.textContent = JSON.stringify(slot.latest, null, 2)
 }
 
@@ -237,10 +241,141 @@ function drawSparkplot(samples) {
   ctx.stroke()
 }
 
-function requestReconnect() {
-  sourceModes = new Map(Array.from(sources.keys(), (source) => [source, 'audio']))
-  sourceRanges = new Map(Array.from(sources.keys(), (source) => [source, { min: -1, max: 1 }]))
+function syncModeToggleLabel() {
+  if (!modeToggleButton) return
+  const mode = sourceModes.get(selectedSource) ?? 'audio'
+  // Two-state toggle:
+  //   audio    -> clamp display to normalized [-1, 1]
+  //   adaptive -> plot against held tracked min/max
+  modeToggleButton.textContent = mode === 'auto' ? 'Adaptive Range' : 'Audio Range'
+  modeToggleButton.dataset.mode = mode
+}
 
+function requestProducerResetRange(source) {
+  // Ask the producer (in the inspected page, possibly inside an iframe) to
+  // clear its authoritative held min/max. If source is omitted the producer
+  // resets every source. JSON.stringify is used so the source name survives
+  // the eval round trip untouched.
+  const argLiteral = typeof source === 'string' ? JSON.stringify(source) : ''
+  chrome.devtools.inspectedWindow.eval(`
+    (() => {
+      const tryReset = (w) => {
+        const cache = w && w.__ELEMAUDIO_DEBUG_CACHE__;
+        if (cache && typeof cache.resetRange === 'function') {
+          cache.resetRange(${argLiteral});
+          return true;
+        }
+        return false;
+      };
+
+      if (tryReset(window)) return true;
+
+      for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+        try {
+          if (tryReset(frame.contentWindow)) return true;
+        } catch {
+          // cross-origin frames are skipped
+        }
+      }
+
+      return false;
+    })()
+  `, () => {
+    // Result intentionally ignored. The next poll tick will repopulate
+    // tracked min/max from fresh audio blocks.
+  })
+}
+
+function requestProducerClampRange(min, max, source) {
+  // Force the producer's held tracked min/max to the given range. Used when
+  // the panel pins a source to Audio [-1..1] mode so the next audio block
+  // cannot expand the range back out.
+  const minLiteral = Number(min)
+  const maxLiteral = Number(max)
+  if (!Number.isFinite(minLiteral) || !Number.isFinite(maxLiteral)) return
+  const sourceLiteral = typeof source === 'string' ? `, ${JSON.stringify(source)}` : ''
+  chrome.devtools.inspectedWindow.eval(`
+    (() => {
+      const tryClamp = (w) => {
+        const cache = w && w.__ELEMAUDIO_DEBUG_CACHE__;
+        if (cache && typeof cache.clampRange === 'function') {
+          cache.clampRange(${minLiteral}, ${maxLiteral}${sourceLiteral});
+          return true;
+        }
+        return false;
+      };
+
+      if (tryClamp(window)) return true;
+
+      for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+        try {
+          if (tryClamp(frame.contentWindow)) return true;
+        } catch {
+          // cross-origin frames are skipped
+        }
+      }
+
+      return false;
+    })()
+  `, () => {
+    // Panel reconciles its own state right after calling this, so the
+    // eval result is intentionally ignored.
+  })
+}
+
+function toggleSelectedSourceMode() {
+  if (!selectedSource) return
+
+  const currentMode = sourceModes.get(selectedSource) ?? 'audio'
+  const nextMode = currentMode === 'auto' ? 'audio' : 'auto'
+  sourceModes.set(selectedSource, nextMode)
+
+  const slot = sources.get(selectedSource)
+
+  if (nextMode === 'auto') {
+    // Entering adaptive mode always resets tracked extremes so the range
+    // re-seeds cleanly from whatever the signal is doing right now.
+    sourceRanges.delete(selectedSource)
+    lastSeenBySource.delete(selectedSource)
+
+    if (slot?.latest) {
+      slot.latest = { ...slot.latest, trackedMin: undefined, trackedMax: undefined }
+    }
+
+    requestProducerResetRange(selectedSource)
+  } else {
+    // Returning to Audio mode pins the source's tracked range to [-1, 1]
+    // on both sides, then immediately polls the cache so the readout
+    // reflects the clamp without waiting for the next 50ms tick.
+    sourceRanges.set(selectedSource, { min: -1, max: 1 })
+    lastSeenBySource.delete(selectedSource)
+
+    if (slot?.latest) {
+      slot.latest = { ...slot.latest, trackedMin: -1, trackedMax: 1 }
+    }
+
+    requestProducerClampRange(-1, 1, selectedSource)
+    pollCache()
+  }
+
+  syncModeToggleLabel()
+  renderSelectedSource()
+}
+
+function requestReconnect() {
+  // User-intent reset: wipe all per-source modes and tracked ranges on both
+  // the panel and the producer, then pull fresh state.
+  sourceModes = new Map(Array.from(sources.keys(), (source) => [source, 'audio']))
+  sourceRanges = new Map(Array.from(sources.keys(), (source) => [source, null]))
+  lastSeenBySource = new Map()
+
+  requestProducerResetRange(undefined)
+  syncModeToggleLabel()
+
+  pollCache()
+}
+
+function pollCache() {
   if (!bridgeConnected) {
     setStatus('waiting for inspected page debug cache')
   }
@@ -248,6 +383,7 @@ function requestReconnect() {
   if (!sources.has(selectedSource) && sourceSelect.options.length > 0) {
     selectedSource = sourceSelect.options[0].value
     sourceSelect.value = selectedSource
+    syncModeToggleLabel()
   }
 
   chrome.devtools.inspectedWindow.eval(`
@@ -319,7 +455,8 @@ function ingestCache(cache) {
 }
 
 window.setInterval(() => {
-  requestReconnect()
+  pollCache()
 }, POLL_INTERVAL_MS)
 
-requestReconnect()
+syncModeToggleLabel()
+pollCache()

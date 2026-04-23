@@ -1,1 +1,1 @@
-chrome.devtools.panels.create('elemaudio', '', 'panel.html', () => {})
+chrome.devtools.panels.create('elemaudiors', '', 'panel.html', () => {})
